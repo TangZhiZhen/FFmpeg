@@ -36,6 +36,8 @@
 #include "avcodec.h"
 #include "qsv_internal.h"
 
+#define MFX_IMPL_VIA_MASK(impl) (0x0f00 & (impl))
+
 #if QSV_VERSION_ATLEAST(1, 12)
 #include "mfx/mfxvp8.h"
 #endif
@@ -239,7 +241,9 @@ int ff_qsv_find_surface_idx(QSVFramesContext *ctx, QSVFrame *frame)
     int i;
     for (i = 0; i < ctx->nb_mids; i++) {
         QSVMid *mid = &ctx->mids[i];
-        if (mid->handle == frame->surface.Data.MemId)
+        mfxHDLPair *pair = (mfxHDLPair*)frame->surface.Data.MemId;
+        if ((mid->handle_pair->first == pair->first) &&
+            (mid->handle_pair->second == pair->second))
             return i;
     }
     return AVERROR_BUG;
@@ -423,7 +427,7 @@ static AVBufferRef *qsv_create_mids(AVBufferRef *hw_frames_ref)
 
     for (i = 0; i < nb_surfaces; i++) {
         QSVMid *mid = &mids[i];
-        mid->handle        = frames_hwctx->surfaces[i].Data.MemId;
+        mid->handle_pair   = (mfxHDLPair*)frames_hwctx->surfaces[i].Data.MemId;
         mid->hw_frames_ref = hw_frames_ref1;
     }
 
@@ -600,7 +604,7 @@ static mfxStatus qsv_frame_lock(mfxHDL pthis, mfxMemId mid, mfxFrameData *ptr)
         goto fail;
 
     qsv_mid->surf.Info = hw_frames_hwctx->surfaces[0].Info;
-    qsv_mid->surf.Data.MemId = qsv_mid->handle;
+    qsv_mid->surf.Data.MemId = qsv_mid->handle_pair;
 
     /* map the data to the system memory */
     ret = av_hwframe_map(qsv_mid->locked_frame, qsv_mid->hw_frame,
@@ -633,7 +637,13 @@ static mfxStatus qsv_frame_unlock(mfxHDL pthis, mfxMemId mid, mfxFrameData *ptr)
 static mfxStatus qsv_frame_get_hdl(mfxHDL pthis, mfxMemId mid, mfxHDL *hdl)
 {
     QSVMid *qsv_mid = (QSVMid*)mid;
-    *hdl = qsv_mid->handle;
+    mfxHDLPair *pair_dst = (mfxHDLPair*)hdl;
+    mfxHDLPair *pair_src = (mfxHDLPair*)qsv_mid->handle_pair;
+
+    pair_dst->first = pair_src->first;
+
+    if (pair_src->second != (mfxMemId)MFX_INFINITE)
+        pair_dst->second = pair_src->second;
     return MFX_ERR_NONE;
 }
 
